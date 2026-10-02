@@ -104,7 +104,6 @@ jobs:
       - name: Run the vectors
         working-directory: sdk
         env:
-          PYTHONPATH: ${{ github.workspace }}/tck
           VERIFIER: ${{ inputs.verifier }}
           REQUIRE: ${{ inputs.require }}
           NO_FALSE_ACCEPTS: ${{ inputs.no-false-accepts }}
@@ -113,7 +112,9 @@ jobs:
           for r in $REQUIRE; do args+=(--require "$r"); done
           for r in $NO_FALSE_ACCEPTS; do args+=(--no-false-accepts "$r"); done
           set +e
-          python -m tck.conformance.card_sign --verifier "$VERIFIER" --json-out "$GITHUB_WORKSPACE/card-sign-report.json" "${args[@]}" > "$GITHUB_WORKSPACE/card-sign-report.txt"
+          # Run the runner by path, not with -m: the caller's checkout may have its own tck/ directory (a2a-python does),
+          # which would shadow this package. The runner needs only the standard library.
+          python "$GITHUB_WORKSPACE/tck/tck/conformance/card_sign.py" --verifier "$VERIFIER" --json-out "$GITHUB_WORKSPACE/card-sign-report.json" "${args[@]}" > "$GITHUB_WORKSPACE/card-sign-report.txt"
           status=$?
           cat "$GITHUB_WORKSPACE/card-sign-report.txt"
           { echo '### Card signature vectors'; echo '```'; cat "$GITHUB_WORKSPACE/card-sign-report.txt"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
