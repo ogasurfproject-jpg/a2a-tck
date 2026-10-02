@@ -68,7 +68,7 @@ scoped two ways, and s2 makes the two scopes testable against each other:
 
 | reading | what it does | matches |
 |---|---|---|
-| `rule-1-served-scope` | rule 1 applied to the fields present in the served JSON; an absent field stays absent | the section's worked example (S2-WE-011), and no SDK as shipped |
+| `rule-1-served-scope` | rule 1 applied to the fields present in the served JSON; an absent field stays absent | the section's worked example (S2-WE-011), and no SDK as shipped; the aeoess/a2a-python candidate at 2491248 (not a release) |
 | `rule-1-descriptor-scope` | rule 1 applied by walking the AgentCard descriptor; an absent REQUIRED field is emitted at its default (`""`, `[]`, `{}`) | a2a-python at a2aproject/a2a-python#1287 head cdee28e |
 
 On s0 and s1 both scopes give the `rule-1-as-written` bytes. `prune-empty` and `served-as-is` keep their meaning.
@@ -96,7 +96,7 @@ signature covers them. The s0, s1 and s2 files are unchanged byte for byte. s3 i
 
 | reading | what it does | matches |
 |---|---|---|
-| `unknown-retain` | served-scope rule 1 on the defined fields; every undefined field kept verbatim where it was served | a2a-go main 534a60fc |
+| `unknown-retain` | served-scope rule 1 on the defined fields; every undefined field kept verbatim where it was served | a2a-go main 534a60fc; the aeoess/a2a-python candidate at 2491248 (not a release) |
 | `unknown-exclude` | every undefined field removed at every depth, then served-scope rule 1 | a2a-sdk 1.2.1, @a2a-js/sdk 1.3.0, a2a-python#1287 cdee28e |
 | `unknown-reject` | a card carrying any undefined field is refused | no SDK |
 
@@ -120,6 +120,40 @@ signature and allows several, so a signer can carry one signature per form while
 above already accepts S3-D-012. S3-D-013 shows the limit: a verifier that accepts a card when either form verifies
 accepts the edited card too, so the transition belongs on the signer's side, not the verifier's. The "matches" column is recorded, not assumed: `vectors_s3.py` canonicalizes every case with each SDK
 and writes which reading its bytes equal to `MANIFEST.json` under `s3_sdk_forms`.
+
+## Group s4: one field under both its JSON name and its protobuf name
+
+Added after a2aproject/A2A#2122 found that a card can carry one schema field twice, for example `defaultInputModes`
+and `default_input_modes`. A parser that accepts both spellings keeps one value; a verifier that canonicalizes the
+received JSON keeps both members. The specification at `173695755607` does not address it. A sentence was proposed on
+#2122 (issuecomment-5946904114, supported in issuecomment-5947101219):
+
+> A verifier MUST refuse a card in which the same schema field appears under both its JSON name and its protobuf name.
+
+This group is labelled against that proposal, as s3 is labelled against its readings (issuecomment-5947250034). The
+specification does not yet require refusal, so accepting a dual-name card shows divergence from the proposal, not
+failure against the current text. If the sentence is adopted, the results get pinned to the revision that carries it.
+`score.py` prints the group in its own table, and the proposal column counts divergences (`div=`) rather than false
+accepts.
+
+| reading | what it does | matches |
+|---|---|---|
+| `dual-name-tolerate` | the specification text at 173695755607: canonicalize the received JSON under served scope, both spellings kept as served | a2a-go main 534a60fc; aeoess/a2a-python@2491248 |
+| `dual-name-refuse` | the proposed sentence: a card carrying both spellings of one field is refused | aeoess/a2a-python@5f9e52c |
+
+| case | vector | accepted under |
+|---|---|---|
+| `defaultInputModes` and `default_input_modes` at the top level | S4-001 | dual-name-tolerate |
+| `skills[0].inputModes` and `skills[0].input_modes` | S4-002 | dual-name-tolerate |
+| `bearerFormat` and `bearer_format` inside a `securitySchemes` map value | S4-003 | dual-name-tolerate |
+| the same scheme with one spelling (control) | S4-004 | both |
+| the s0 control signed, then `default_input_modes` added after signing | S4-REJECT-005 | neither |
+
+S4-001 to S4-003 are signed over the received JSON with both members. S4-REJECT-005 is the point of the group: under
+either reading the added member must break the signature or be refused. A verifier that drops the snake_case spelling
+before canonicalizing still verifies it, while a parser that keeps the snake_case value reads `image/png` from a card
+whose signature covered `text/plain`. Which form each SDK's canonicalization equals on each case is recorded in
+`MANIFEST.json` under `s4_sdk_forms`.
 
 ## Scoring a verifier
 
@@ -151,6 +185,56 @@ accepts S2-WE-011.
 On 2026-10-02, `observed.s3`: a2a-sdk 1.2.1, @a2a-js/sdk 1.3.0 and a2a-python at #1287 accept S3-002, 004, 006, 008,
 010 and S3-T-011 and reject the odd ones; a2a-go accepts the odd ones and rejects the rest, S3-T-011 included.
 All four accept S3-D-012; a2a-go rejects S3-D-013 and the other three accept it.
+
+The a2a-python#1287 column records commit cdee28e, the descriptor-scope commit, and nothing later. On 2026-10-02 the
+PR head moved to a091c83, which reverts that commit; kuangmi-bit re-measured it as byte-identical to base fad0482 on
+all 37 vectors, so at a091c83 every row reads exactly like the a2a-python (a2a-sdk 1.2.1) column
+(a2aproject/a2a-python#1287). The column stays as the record of the descriptor reading. It is not the PR's current
+behaviour; for the PR head, cite the a2a-python column.
+
+On 2026-10-02, `observed.s4`:
+
+| vector | a2a-python (1.2.1) | a2a-js (1.3.0) | a2a-go | aeoess@2491248 | aeoess@5f9e52c |
+|---|---|---|---|---|---|
+| S4-001 to S4-003 | reject | reject | accept | accept | reject |
+| S4-004 | accept | accept | accept | accept | accept |
+| S4-REJECT-005 | reject | **accept** | reject | reject | reject |
+
+a2a-python 1.2.1 and @a2a-js/sdk 1.3.0 reject S4-001 to S4-003 because they canonicalize another form, not because they
+refuse the card, and they do not agree with each other on that form: a2a-python takes the snake_case value, @a2a-js/sdk
+keeps the camelCase member and drops the other (`s4_sdk_forms`). S4-REJECT-005 separates the two: @a2a-js/sdk 1.3.0
+accepts a card whose snake_case member was added after signing, and a parser that takes that member then reads a value
+the signature never covered.
+
+## Pinned candidates
+
+A candidate that is not a release can be added as its own column without regenerating any vector:
+`observe_pinned.py` runs inside a virtualenv where the candidate is installed from source, refuses to run unless the
+source is at the pinned commit with no local change, passes each served card unmodified to the candidate's verifier,
+and writes the verdicts beside the SDK columns in `MANIFEST.json` (`observed.results`, `observed.s2`, `observed.s3`),
+the pin under `observed.pinned`, and which reading its canonical bytes equal under `s3_sdk_forms`. `--check` reruns and
+compares without writing. The verdicts are also in `verdicts_20261002/` for `score.py`.
+
+`aeoess/a2a-python@5f9e52c` (same branch) adds the refusal of a field given under both spellings. On s0 to s3 its 37
+verdicts are identical to 2491248; on s4 it is the `dual-name-refuse` column. 2491248 stays the pin for the s0 to s3
+numbers published on #2122.
+
+`aeoess/a2a-python@2491248` (branch `candidate/served-scope-1278`, a candidate for a2aproject/A2A#2122): the new entry
+point `create_served_card_signature_verifier` takes the received JSON and canonicalizes it with
+`canonicalize_served_agent_card`; the existing `create_signature_verifier` is unchanged. Measured on 2026-10-02:
+
+| group | reading | right | false accepts |
+|---|---|---|---|
+| s0 | every reading | 5/5 | 0 |
+| s1 | rule-1-as-written | 8/8 | 0 |
+| s2 | rule-1-served-scope | 11/11 | 0 |
+| s3 | unknown-retain | 13/13 | 0 |
+
+S3-D-012 is accepted through its retained-form signature, S3-T-011 and S3-D-013 are refused. On every vector it
+accepts, its canonical bytes equal the bytes the signature covers, and on all five s3 cases they equal the
+`unknown-retain` form. It differs from the a2a-go column only on S1-007, S1-008 (`capabilities.extensions = []`,
+not REQUIRED, dropped) and S2-WE-011. In the same install, the unchanged `create_signature_verifier` reads exactly
+like the a2a-python (a2a-sdk 1.2.1) column on all 37.
 
 ## Key and reproduction
 
