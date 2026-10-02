@@ -161,3 +161,16 @@ def test_main_runs_a_verifier_command(docs: list[dict], tmp_path: Path) -> None:
     assert verdicts["S0-001"] is True
     assert verdicts["S4-REJECT-005"] is False
     assert card_sign.main([]) == 0
+
+
+def test_no_false_accepts_fails_only_on_false_accepts(docs: list[dict], tmp_path: Path) -> None:
+    """--no-false-accepts ignores false rejects and divergences but fails on an accepted MUST-REJECT card."""
+    s4 = {d["id"]: d for d in docs if d.get("axis") == "dual-name"}
+    strict = {vid: vid == "S4-004" for vid in s4}
+    loose = {**strict, "S4-REJECT-005": True}
+    for name, verdicts, want in (("strict", strict, 0), ("loose", loose, 1)):
+        path = tmp_path / (name + ".json")
+        path.write_text(json.dumps({"verdicts": verdicts}), encoding="utf-8")
+        for reading in ("dual-name-tolerate", "dual-name-refuse"):
+            assert card_sign.main(["--verdicts", str(path), "--no-false-accepts", reading]) == want
+    assert card_sign.main(["--verdicts", str(tmp_path / "strict.json"), "--require", "dual-name-tolerate"]) == 1

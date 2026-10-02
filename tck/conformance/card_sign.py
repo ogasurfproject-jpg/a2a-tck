@@ -21,7 +21,9 @@ Run a verifier over every vector::
 The command is run once per vector with ``{card}`` replaced by a file holding the served card and ``{jwks}`` by the
 corpus test key set; exit status 0 means the verifier accepted the card. ``--verdicts file.json`` scores recorded
 verdicts instead (``{"verdicts": {"S0-001": true, ...}}``). ``--require READING`` exits 1 unless the verifier gets every
-vector of that reading right with no false accepts, for use in an SDK's own CI.
+vector of that reading right with no false accepts. ``--no-false-accepts READING`` exits 1 only if the verifier accepts a
+vector that reading rejects, so an SDK's own CI can stop a regression such as accepting S4-REJECT-005 without first
+adopting a reading for the rest of the corpus.
 """
 
 from __future__ import annotations
@@ -231,6 +233,13 @@ def main(argv: list[str] | None = None) -> int:
     src.add_argument("--verifier", help='command template, e.g. "node verify.mjs {card} {jwks}"; exit 0 = accept')
     src.add_argument("--verdicts", type=Path, help='JSON file {"verdicts": {"S0-001": true, ...}}')
     ap.add_argument("--require", action="append", default=[], help="exit 1 unless conformant to this reading")
+    ap.add_argument(
+        "--no-false-accepts",
+        action="append",
+        default=[],
+        metavar="READING",
+        help="exit 1 if the verifier accepts any vector this reading rejects (false rejects and divergences do not fail)",
+    )
     ap.add_argument("--corpus", type=Path, default=CORPUS)
     args = ap.parse_args(argv)
     problems = check_corpus(args.corpus)
@@ -248,7 +257,8 @@ def main(argv: list[str] | None = None) -> int:
     tables = score(docs, verdicts)
     print(render(tables))
     failed = [r for r in args.require for _, t in tables if r in t and (t[r]["right"] != t[r]["of"] or t[r]["false_accepts"])]
-    unknown = [r for r in args.require if not any(r in t for _, t in tables)]
+    failed += [r for r in args.no_false_accepts for _, t in tables if r in t and t[r]["false_accepts"]]
+    unknown = [r for r in args.require + args.no_false_accepts if not any(r in t for _, t in tables)]
     if unknown:
         print("unknown reading: " + ", ".join(unknown))
     return 1 if failed or unknown else 0
