@@ -23,7 +23,8 @@ corpus test key set; exit status 0 means the verifier accepted the card. ``--ver
 verdicts instead (``{"verdicts": {"S0-001": true, ...}}``). ``--require READING`` exits 1 unless the verifier gets every
 vector of that reading right with no false accepts. ``--no-false-accepts READING`` exits 1 only if the verifier accepts a
 vector that reading rejects, so an SDK's own CI can stop a regression such as accepting S4-REJECT-005 without first
-adopting a reading for the rest of the corpus.
+adopting a reading for the rest of the corpus. Either gate also fails when the verifier rejects a MUST-ACCEPT control,
+since a verifier that cannot run rejects everything and would otherwise pass a false-accept gate.
 """
 
 from __future__ import annotations
@@ -241,6 +242,7 @@ def main(argv: list[str] | None = None) -> int:
         help="exit 1 if the verifier accepts any vector this reading rejects (false rejects and divergences do not fail)",
     )
     ap.add_argument("--corpus", type=Path, default=CORPUS)
+    ap.add_argument("--json-out", type=Path, help="also write the verdicts, tables and gate outcome to this JSON file")
     args = ap.parse_args(argv)
     problems = check_corpus(args.corpus)
     if problems:
@@ -256,12 +258,35 @@ def main(argv: list[str] | None = None) -> int:
         verdicts = json.loads(args.verdicts.read_text(encoding="utf-8"))["verdicts"]
     tables = score(docs, verdicts)
     print(render(tables))
+    # A verifier that cannot run rejects everything, which no false-accept gate notices. Every reading accepts the
+    # MUST-ACCEPT controls, so a gated run fails when any of them is rejected.
+    controls_rejected = [d["id"] for d in docs if d["disposition"] == "MUST-ACCEPT" and d["id"] in verdicts and not verdicts[d["id"]]]
+    if controls_rejected:
+        print("verifier rejected vectors every reading accepts (" + ", ".join(controls_rejected) + "): check that it runs")
     failed = [r for r in args.require for _, t in tables if r in t and (t[r]["right"] != t[r]["of"] or t[r]["false_accepts"])]
     failed += [r for r in args.no_false_accepts for _, t in tables if r in t and t[r]["false_accepts"]]
     unknown = [r for r in args.require + args.no_false_accepts if not any(r in t for _, t in tables)]
     if unknown:
         print("unknown reading: " + ", ".join(unknown))
-    return 1 if failed or unknown else 0
+    if args.json_out:
+        manifest_sha = hashlib.sha256((args.corpus / "MANIFEST.json").read_bytes()).hexdigest()
+        report = {
+            "runner": "tck.conformance.card_sign",
+            "corpus": {"vectors": len(docs), "manifest_sha256": manifest_sha},
+            "source": "verifier" if args.verifier else "verdicts",
+            "verdicts": verdicts,
+            "tables": [{"title": title, "readings": table} for title, table in tables],
+            "gates": {
+                "require": args.require,
+                "no_false_accepts": args.no_false_accepts,
+                "failed": failed,
+                "unknown": unknown,
+                "controls_rejected": controls_rejected,
+            },
+        }
+        args.json_out.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    gated = bool(args.require or args.no_false_accepts)
+    return 1 if failed or unknown or (gated and controls_rejected) else 0
 
 
 if __name__ == "__main__":

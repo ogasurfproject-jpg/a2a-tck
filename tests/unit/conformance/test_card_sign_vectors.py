@@ -144,7 +144,8 @@ def test_main_scores_recorded_verdicts_and_enforces_require(docs: list[dict], tm
     """The CLI exits 1 when a required reading is not met or unknown, 0 when it is met."""
     verdicts = tmp_path / "v.json"
     reading = "rule-1-served-scope"
-    verdicts.write_text(json.dumps({"verdicts": {d["id"]: card_sign.expected(d, reading) for d in docs}}), encoding="utf-8")
+    honest = {d["id"]: card_sign.expected(d, reading) or d["disposition"] == "MUST-ACCEPT" for d in docs}
+    verdicts.write_text(json.dumps({"verdicts": honest}), encoding="utf-8")
     assert card_sign.main(["--verdicts", str(verdicts), "--require", reading, "--require", "unknown-exclude"]) == 1
     assert card_sign.main(["--verdicts", str(verdicts), "--require", reading]) == 0
     assert card_sign.main(["--verdicts", str(verdicts), "--require", "no-such-reading"]) == 1
@@ -174,3 +175,31 @@ def test_no_false_accepts_fails_only_on_false_accepts(docs: list[dict], tmp_path
         for reading in ("dual-name-tolerate", "dual-name-refuse"):
             assert card_sign.main(["--verdicts", str(path), "--no-false-accepts", reading]) == want
     assert card_sign.main(["--verdicts", str(tmp_path / "strict.json"), "--require", "dual-name-tolerate"]) == 1
+
+
+def test_json_out_records_verdicts_tables_and_gates(docs: list[dict], tmp_path: Path) -> None:
+    """--json-out writes what was scored and why the run passed or failed, for a CI job to retain."""
+    verdicts = {d["id"]: card_sign.expected(d, "rule-1-served-scope") or d["disposition"] == "MUST-ACCEPT" for d in docs}
+    src = tmp_path / "v.json"
+    src.write_text(json.dumps({"verdicts": verdicts}), encoding="utf-8")
+    out = tmp_path / "report.json"
+    assert card_sign.main(["--verdicts", str(src), "--no-false-accepts", "dual-name-refuse", "--json-out", str(out)]) == 0
+    report = json.loads(out.read_text(encoding="utf-8"))
+    assert report["corpus"]["vectors"] == len(docs)
+    assert report["verdicts"] == verdicts
+    assert [t["title"] for t in report["tables"]] == [title for title, _, _ in card_sign.TABLES]
+    assert report["gates"] == {
+        "require": [],
+        "no_false_accepts": ["dual-name-refuse"],
+        "failed": [],
+        "unknown": [],
+        "controls_rejected": [],
+    }
+
+
+def test_a_verifier_that_rejects_everything_fails_a_gated_run(docs: list[dict], tmp_path: Path) -> None:
+    """A broken verifier rejects every card; the MUST-ACCEPT controls make a gated run fail instead of pass."""
+    src = tmp_path / "v.json"
+    src.write_text(json.dumps({"verdicts": dict.fromkeys((d["id"] for d in docs), False)}), encoding="utf-8")
+    assert card_sign.main(["--verdicts", str(src)]) == 0
+    assert card_sign.main(["--verdicts", str(src), "--no-false-accepts", "dual-name-refuse"]) == 1
